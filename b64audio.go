@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	BLOCK_SIZE = 4096
+	BLOCK_SIZE = 480 // 60ms at 8kHz/8bit, for Opus encoding
 )
 
 // WAVInfo contains wav information
