@@ -6,11 +6,16 @@ import (
 	"encoding/binary"
 	"log"
 
+	"gopkg.in/hraban/opus.v2"
+
 	"github.com/gordonklaus/portaudio"
 )
 
 const (
-	BLOCK_SIZE = 480 // 60ms at 8kHz/8bit, for Opus encoding
+	BLOCK_SIZE    = 480  // 60ms at 8kHz/8bit, for Opus encoding
+	FRAME_SIZE_MS = 60   // 60ms
+	SAMPLE_RATE   = 8000 // kHz
+	CHANNELS      = 1
 )
 
 // WAVInfo contains wav information
@@ -60,7 +65,7 @@ func EncodePayload(chunk []byte) []byte {
 func PlayWAVChunk(chunk []byte) error {
 	chunk = chunk[44:]
 	buf := make([]uint8, len(chunk))
-	stream, err := portaudio.OpenDefaultStream(0, 1, 8000, 8, &buf)
+	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &buf)
 	if err != nil {
 		return err
 	}
@@ -83,7 +88,7 @@ func PlayWAVChunk(chunk []byte) error {
 
 // PlayChunk plays raw PCM chunk
 func PlayChunk(chunk []byte) error {
-	stream, err := portaudio.OpenDefaultStream(0, 1, 8000, 8, &chunk)
+	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &chunk)
 	if err != nil {
 		return err
 	}
@@ -104,7 +109,7 @@ func PlayChunk(chunk []byte) error {
 // It's blocking function.
 func ContinuousPlay(ingoing chan []byte) error {
 	chunk := make([]uint8, BLOCK_SIZE)
-	stream, err := portaudio.OpenDefaultStream(0, 1, 8000, 8, &chunk)
+	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &chunk)
 	if err != nil {
 		return err
 	}
@@ -124,7 +129,7 @@ func ContinuousPlay(ingoing chan []byte) error {
 
 func RecordWAVChunk() ([]byte, error) {
 	buf := make([]uint8, BLOCK_SIZE)
-	stream, err := portaudio.OpenDefaultStream(1, 0, 8000, BLOCK_SIZE, &buf)
+	stream, err := portaudio.OpenDefaultStream(1, 0, SAMPLE_RATE, BLOCK_SIZE, &buf)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +153,7 @@ func RecordWAVChunk() ([]byte, error) {
 // RecordChunk records audio chunk
 func RecordChunk() ([]byte, error) {
 	buf := make([]uint8, BLOCK_SIZE)
-	stream, err := portaudio.OpenDefaultStream(1, 0, 8000, BLOCK_SIZE, &buf)
+	stream, err := portaudio.OpenDefaultStream(1, 0, SAMPLE_RATE, BLOCK_SIZE, &buf)
 	if err != nil {
 		return nil, err
 	}
@@ -166,10 +171,10 @@ func RecordChunk() ([]byte, error) {
 }
 
 // ContinuousRecord records chunks and puts them into channel.
-// It's blocking function.
+// It's a blocking function.
 func ContinuousRecord(outgoing chan []byte) error {
 	buf := make([]uint8, BLOCK_SIZE)
-	stream, err := portaudio.OpenDefaultStream(1, 0, 8000, BLOCK_SIZE, &buf)
+	stream, err := portaudio.OpenDefaultStream(1, 0, SAMPLE_RATE, BLOCK_SIZE, &buf)
 	if err != nil {
 		return err
 	}
@@ -184,5 +189,73 @@ func ContinuousRecord(outgoing chan []byte) error {
 			return err
 		}
 		outgoing <- buf
+	}
+}
+
+// ContinuousRecordOpus records Opus encoded chunks and puts them into channel.
+// It's a blocking function.
+func ContinuousRecordOpus(outgoing chan []byte) error {
+	pcm_buf := make([]int16, BLOCK_SIZE)
+	stream, err := portaudio.OpenDefaultStream(1, 0, SAMPLE_RATE, BLOCK_SIZE, &pcm_buf)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if err = stream.Start(); err != nil {
+		return err
+	}
+	defer stream.Stop()
+
+	enc, err := opus.NewEncoder(SAMPLE_RATE, 1, opus.AppVoIP)
+	if err != nil {
+		return err
+	}
+	enc.SetBitrate(16)
+	const opus_buff_size = 1024
+	data := make([]byte, opus_buff_size)
+	for {
+		if err = stream.Read(); err != nil {
+			return err
+		}
+		n, err := enc.Encode(pcm_buf, data)
+		if err != nil {
+			return err
+		}
+		outgoing <- data[:n]
+	}
+}
+
+// ContinuousPlayOpus opens audio stream and plays opus encoded chunks,
+// requesting ingoing channel.
+// It's a blocking function.
+func ContinuousPlayOpus(ingoing chan []byte) error {
+	dec, err := opus.NewDecoder(SAMPLE_RATE, 1)
+	if err != nil {
+		return err
+	}
+	frame_size := CHANNELS * FRAME_SIZE_MS * SAMPLE_RATE / 1000
+	pcm_chunk := make([]int16, int(frame_size))
+	var opus_data []byte
+
+	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &pcm_chunk)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if err = stream.Start(); err != nil {
+		return err
+	}
+	defer stream.Stop()
+
+	for {
+		opus_data = <-ingoing
+		_, err := dec.Decode(opus_data, pcm_chunk)
+		if err != nil {
+			return err
+		}
+		// pcm_chunk = pcm_chunk[:n*CHANNELS]
+		if err = stream.Write(); err != nil {
+			log.Println(err)
+		}
 	}
 }
