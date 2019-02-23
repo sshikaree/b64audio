@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"log"
+	"time"
 
 	"gopkg.in/hraban/opus.v2"
 
@@ -12,10 +13,11 @@ import (
 )
 
 const (
-	BLOCK_SIZE    = 480  // 60ms at 8kHz/8bit, for Opus encoding
+	BLOCK_SIZE    = 480  //480 == 60ms at 8kHz/8bit, for Opus encoding
 	FRAME_SIZE_MS = 60   // 60ms
 	SAMPLE_RATE   = 8000 // kHz
 	CHANNELS      = 1
+	OPUS_BIT_RATE = 16000
 )
 
 // WAVInfo contains wav information
@@ -109,6 +111,10 @@ func PlayChunk(chunk []byte) error {
 // It's blocking function.
 func ContinuousPlay(ingoing chan []byte) error {
 	chunk := make([]uint8, BLOCK_SIZE)
+	silence := make([]uint8, BLOCK_SIZE)
+	for i, _ := range silence {
+		silence[i] = 128
+	}
 	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &chunk)
 	if err != nil {
 		return err
@@ -120,7 +126,11 @@ func ContinuousPlay(ingoing chan []byte) error {
 	defer stream.Stop()
 
 	for {
-		chunk = <-ingoing
+		select {
+		case chunk = <-ingoing:
+		case <-time.After(2 * time.Millisecond):
+			chunk = silence
+		}
 		if err = stream.Write(); err != nil {
 			log.Println(err)
 		}
@@ -210,7 +220,7 @@ func ContinuousRecordOpus(outgoing chan []byte) error {
 	if err != nil {
 		return err
 	}
-	enc.SetBitrate(16)
+	enc.SetBitrate(OPUS_BIT_RATE)
 	const opus_buff_size = 1024
 	data := make([]byte, opus_buff_size)
 	for {
@@ -235,6 +245,10 @@ func ContinuousPlayOpus(ingoing chan []byte) error {
 	}
 	frame_size := CHANNELS * FRAME_SIZE_MS * SAMPLE_RATE / 1000
 	pcm_chunk := make([]int16, int(frame_size))
+	silence := make([]int16, BLOCK_SIZE)
+	for i, _ := range silence {
+		silence[i] = 128
+	}
 	var opus_data []byte
 
 	stream, err := portaudio.OpenDefaultStream(0, 1, SAMPLE_RATE, 8, &pcm_chunk)
@@ -248,11 +262,16 @@ func ContinuousPlayOpus(ingoing chan []byte) error {
 	defer stream.Stop()
 
 	for {
-		opus_data = <-ingoing
-		_, err := dec.Decode(opus_data, pcm_chunk)
-		if err != nil {
-			return err
+		select {
+		case opus_data = <-ingoing:
+			_, err := dec.Decode(opus_data, pcm_chunk)
+			if err != nil {
+				return err
+			}
+		case <-time.After(2 * time.Millisecond):
+			pcm_chunk = silence
 		}
+
 		// pcm_chunk = pcm_chunk[:n*CHANNELS]
 		if err = stream.Write(); err != nil {
 			log.Println(err)
