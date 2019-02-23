@@ -38,12 +38,22 @@ func GetWAVInfo(chunk []byte) (*WAVInfo, error) {
 
 // DecodePayload converts base64 to []byte
 func DecodePayload(payload []byte) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(string(payload))
+	buf := make([]byte, base64.StdEncoding.DecodedLen(len(payload)))
+	n, err := base64.StdEncoding.Decode(buf, payload)
+	return buf[:n], err
+	//return base64.StdEncoding.DecodeString(string(payload))
 }
 
-// EncodePayload converts []byte to base64 string
-func EncodePayload(chunk []byte) string {
+// EncodePayloadToString converts []byte to base64 string
+func EncodePayloadToString(chunk []byte) string {
 	return base64.StdEncoding.EncodeToString(chunk)
+}
+
+// EncodePayload retruns the base64 encoding of input
+func EncodePayload(chunk []byte) []byte {
+	buf := make([]byte, base64.StdEncoding.EncodedLen(len(chunk)))
+	base64.StdEncoding.Encode(buf, chunk)
+	return buf
 }
 
 // PlayWAVChunk plays wav format chunk
